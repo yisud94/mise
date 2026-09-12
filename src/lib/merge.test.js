@@ -83,7 +83,7 @@ describe("merge — Section 7 worked example", () => {
 // derived by running an implementation.
 // ---------------------------------------------------------------------------
 describe("merge — rules from Section 6", () => {
-  test("steps on a resource other than 'hands' never merge, even with matching action/object", () => {
+  test("cooking steps on the hob never merge, even with matching action/object (oven preheats are the one exception — see below)", () => {
     const dishes = [
       { name: "dish a", steps: [{ action: "simmer", object: "sauce", setupMin: 1, perUnitMin: 10, units: 1, resource: "hob", mergeable: true, dependsOn: [] }] },
       { name: "dish b", steps: [{ action: "simmer", object: "sauce", setupMin: 1, perUnitMin: 10, units: 1, resource: "hob", mergeable: true, dependsOn: [] }] },
@@ -113,5 +113,47 @@ describe("merge — rules from Section 6", () => {
     expect(batchSaving).toBe((2 - 1) * 1); // frozen formula, Section 6
     expect(merged[0].action).toBe("dice");
     expect(merged[0].object).toBe("onion");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Section 4's oven-preheat exception: "Two dishes at 200°C merge
+// automatically under the normal merge rule." A preheat step's resource is
+// "oven", not "hands", so Section 6's rule taken alone would never merge
+// it — this is the reconciliation of that contradiction (see merge.js's
+// isMergeCandidate comment).
+// ---------------------------------------------------------------------------
+describe("merge — Section 4 oven-preheat exception", () => {
+  test("two dishes preheating to the same temperature merge into one oven step", () => {
+    const dishes = [
+      { name: "roast chicken", steps: [{ action: "preheat", object: "oven_200c", setupMin: 10, perUnitMin: 0, units: 1, resource: "oven", mergeable: true, dependsOn: [] }] },
+      { name: "roast potatoes", steps: [{ action: "preheat", object: "oven_200c", setupMin: 10, perUnitMin: 0, units: 1, resource: "oven", mergeable: true, dependsOn: [] }] },
+    ];
+    const { merged, batchSaving } = merge(flattenDishes(dishes));
+    expect(merged).toHaveLength(1);
+    const preheat = merged[0];
+    expect(preheat.resource).toBe("oven"); // must not be forced to "hands"
+    expect(preheat.dishes.sort()).toEqual(["roast chicken", "roast potatoes"]);
+    expect(batchSaving).toBe((2 - 1) * 10); // frozen formula, Section 6
+  });
+
+  test("dishes preheating to different temperatures do not merge (Section 4: serialised instead)", () => {
+    const dishes = [
+      { name: "roast chicken", steps: [{ action: "preheat", object: "oven_200c", setupMin: 10, perUnitMin: 0, units: 1, resource: "oven", mergeable: true, dependsOn: [] }] },
+      { name: "lamb biryani", steps: [{ action: "preheat", object: "oven_180c", setupMin: 10, perUnitMin: 0, units: 1, resource: "oven", mergeable: true, dependsOn: [] }] },
+    ];
+    const { merged, batchSaving } = merge(flattenDishes(dishes));
+    expect(merged).toHaveLength(2);
+    expect(batchSaving).toBe(0);
+  });
+
+  test("matching-object oven steps that aren't preheat (e.g. two roasts) still don't merge — 'two pans are two pans' still holds for the actual cooking", () => {
+    const dishes = [
+      { name: "dish a", steps: [{ action: "roast", object: "vegetable", setupMin: 1, perUnitMin: 20, units: 1, resource: "oven", mergeable: true, dependsOn: [] }] },
+      { name: "dish b", steps: [{ action: "roast", object: "vegetable", setupMin: 1, perUnitMin: 20, units: 1, resource: "oven", mergeable: true, dependsOn: [] }] },
+    ];
+    const { merged, batchSaving } = merge(flattenDishes(dishes));
+    expect(merged).toHaveLength(2);
+    expect(batchSaving).toBe(0);
   });
 });
