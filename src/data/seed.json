@@ -1,0 +1,33 @@
+[
+  {
+    "_id": "tomato pasta",
+    "source": "seed",
+    "steps": [
+      { "action": "dice", "object": "onion", "setupMin": 1, "perUnitMin": 2, "units": 1, "resource": "hands", "mergeable": true, "dependsOn": [] },
+      { "action": "boil", "object": "pasta", "setupMin": 1, "perUnitMin": 10, "units": 1, "resource": "hob", "mergeable": true, "dependsOn": [] },
+      { "action": "simmer", "object": "sauce", "setupMin": 1, "perUnitMin": 14, "units": 1, "resource": "hob", "mergeable": true, "dependsOn": [0] },
+      { "action": "mix", "object": "pasta", "setupMin": 1, "perUnitMin": 2, "units": 1, "resource": "hands", "mergeable": false, "dependsOn": [1, 2] }
+    ]
+  },
+  {
+    "_id": "dal",
+    "source": "seed",
+    "steps": [
+      { "action": "dice", "object": "onion", "setupMin": 1, "perUnitMin": 2, "units": 1, "resource": "hands", "mergeable": true, "dependsOn": [] },
+      { "action": "measure", "object": "lentil", "setupMin": 1, "perUnitMin": 1, "units": 1, "resource": "hands", "mergeable": true, "dependsOn": [] },
+      { "action": "simmer", "object": "dal", "setupMin": 1, "perUnitMin": 24, "units": 1, "resource": "hob", "mergeable": true, "dependsOn": [0, 1] }
+    ]
+  },
+  {
+    "_id": "roast chicken",
+    "source": "seed",
+    "steps": [
+      { "action": "measure", "object": "spice", "setupMin": 1, "perUnitMin": 1, "units": 1, "resource": "hands", "mergeable": true, "dependsOn": [] },
+      { "action": "wash", "object": "chicken", "setupMin": 1, "perUnitMin": 3, "units": 1, "resource": "hands", "mergeable": true, "dependsOn": [] },
+      { "action": "mix", "object": "chicken", "setupMin": 1, "perUnitMin": 2, "units": 1, "resource": "hands", "mergeable": false, "dependsOn": [0, 1] },
+      { "action": "preheat", "object": "oven_200c", "setupMin": 2, "perUnitMin": 0, "units": 1, "resource": "oven", "mergeable": true, "dependsOn": [] },
+      { "action": "roast", "object": "chicken", "setupMin": 1, "perUnitMin": 40, "units": 1, "resource": "oven", "mergeable": false, "dependsOn": [2, 3] },
+      { "action": "rest", "object": "chicken", "setupMin": 10, "perUnitMin": 0, "units": 1, "resource": "passive", "mergeable": true, "dependsOn": [4] }
+    ]
+  }
+]
