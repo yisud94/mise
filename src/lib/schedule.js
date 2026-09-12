@@ -15,7 +15,6 @@ function buildDependents(steps) {
 // algorithm step 2) if a cycle leaves some steps permanently blocked.
 function topologicalOrder(steps, dependents) {
   const inDegree = new Map(steps.map((s) => [s.id, s.dependsOn.length]));
-  const byId = new Map(steps.map((s) => [s.id, s]));
   const queue = steps.filter((s) => s.dependsOn.length === 0).map((s) => s.id);
   const order = [];
 
@@ -59,25 +58,57 @@ function computeSlack(steps, dependents, topoOrder) {
   return slack;
 }
 
+// The oven temperature a step needs, or null if it doesn't care. A preheat
+// step sets it directly (its object IS the temperature, e.g. "oven_200c");
+// a cook step inherits it from whichever preheat it depends on. Resource
+// capacity tracks occupancy only, never what temperature the oven is
+// actually at, so this is what a step's own placement can't see on its own.
+function ovenTempOf(step, byId) {
+  if (step.resource !== "oven") return null;
+  if (step.action.toLowerCase() === "preheat") return step.object;
+  for (const depId of step.dependsOn) {
+    const dep = byId.get(depId);
+    if (dep && dep.resource === "oven" && dep.action.toLowerCase() === "preheat") return dep.object;
+  }
+  return null;
+}
+
 // Priority-topological order: repeatedly pick, from the currently-eligible
 // pool, the step with the largest slack (Section 5.5: descending slack,
 // ties broken by original flattened order). A step becomes eligible the
 // moment all of its dependencies have been picked — not when their actual
 // placed time elapses; ordering and time-placement are separate phases.
+//
+// One nudge layered on top of pure slack: once the oven has been committed
+// to a temperature, a step needing a different one is sorted behind
+// anything else ready, rather than jumping the queue on slack alone. This
+// alone can't fully prevent a premature temperature switch (this is just
+// pick order — an unrelated step being picked first doesn't change where
+// a preheat's own placement search lands it), so the actual enforcement
+// lives in schedule()'s placement loop; this just gives it a better
+// starting order to work with.
 function priorityOrder(steps, dependents, slack) {
   const byId = new Map(steps.map((s) => [s.id, s]));
   const picked = new Set();
   const pool = steps.filter((s) => s.dependsOn.length === 0);
   const result = [];
+  let activeOvenTemp = null;
 
   while (pool.length) {
     pool.sort((a, b) => {
+      const aConflicts = activeOvenTemp && ovenTempOf(a, byId) && ovenTempOf(a, byId) !== activeOvenTemp;
+      const bConflicts = activeOvenTemp && ovenTempOf(b, byId) && ovenTempOf(b, byId) !== activeOvenTemp;
+      if (aConflicts !== bConflicts) return aConflicts ? 1 : -1;
+
       const diff = slack.get(b.id) - slack.get(a.id);
       return diff !== 0 ? diff : a.order - b.order;
     });
     const next = pool.shift();
     result.push(next);
     picked.add(next.id);
+
+    const nextTemp = ovenTempOf(next, byId);
+    if (nextTemp) activeOvenTemp = nextTemp;
 
     for (const depId of dependents.get(next.id)) {
       const depStep = byId.get(depId);
@@ -134,19 +165,60 @@ function earliestStart(intervals, cap, minStart, dur) {
 export function schedule(steps, capacity = DEFAULT_CAPACITY) {
   const sequentialTotal = steps.reduce((sum, s) => sum + duration(s), 0);
   const { merged, batchSaving } = merge(steps);
-
   const byId = new Map(merged.map((s) => [s.id, s]));
+
   const dependents = buildDependents(merged);
   const topoOrder = topologicalOrder(merged, dependents);
   const slack = computeSlack(merged, dependents, topoOrder);
   const order = priorityOrder(merged, dependents, slack);
 
+  // Section 4/5.13: once the oven is set to a temperature, everything at
+  // that temperature should run before it switches — but resource
+  // intervals only track occupancy, never what temperature is actually
+  // set, so a temperature-conflicting step is otherwise free to grab an
+  // early, still-idle oven slot purely because its own dependencies happen
+  // to be met (a dish's oven step can be "ready" long before its own prep
+  // chain elsewhere actually finishes). Two parts: don't even select a
+  // conflicting step while anything — ready or not — still needs the
+  // active temperature; and once a switch is genuinely due, anchor its
+  // start to the real last-placed time for that temperature, not just its
+  // own dependencies, so it can't backfill into an early gap that predates
+  // work still to come.
   const placed = new Map();
   const resourceIntervals = new Map();
+  const pending = [...order];
+  let activeOvenTemp = null;
 
-  for (const step of order) {
+  while (pending.length) {
+    const activeTempPending = activeOvenTemp && pending.some((s) => ovenTempOf(s, byId) === activeOvenTemp);
+
+    let chosenIndex = -1;
+    let fallbackIndex = -1;
+    for (let i = 0; i < pending.length; i++) {
+      const candidate = pending[i];
+      if (!candidate.dependsOn.every((depId) => placed.has(depId))) continue;
+      const temp = ovenTempOf(candidate, byId);
+      const conflicts = activeOvenTemp && temp && temp !== activeOvenTemp;
+      if (conflicts && activeTempPending) {
+        if (fallbackIndex === -1) fallbackIndex = i;
+        continue;
+      }
+      chosenIndex = i;
+      break;
+    }
+    const [step] = pending.splice(chosenIndex !== -1 ? chosenIndex : fallbackIndex, 1);
+
     const depEnds = step.dependsOn.map((depId) => placed.get(depId).endMin);
-    const minStart = depEnds.length ? Math.max(...depEnds) : 0;
+    let minStart = depEnds.length ? Math.max(...depEnds) : 0;
+
+    const stepTemp = ovenTempOf(step, byId);
+    if (stepTemp && activeOvenTemp && stepTemp !== activeOvenTemp) {
+      const activeTempEnds = [...placed.entries()]
+        .filter(([id]) => ovenTempOf(byId.get(id), byId) === activeOvenTemp)
+        .map(([, p]) => p.endMin);
+      if (activeTempEnds.length) minStart = Math.max(minStart, ...activeTempEnds);
+    }
+
     const dur = duration(step);
     const intervals = resourceIntervals.get(step.resource) ?? [];
     const cap = capacity[step.resource];
@@ -156,6 +228,10 @@ export function schedule(steps, capacity = DEFAULT_CAPACITY) {
     placed.set(step.id, { startMin: start, endMin: end });
     intervals.push({ start, end });
     resourceIntervals.set(step.resource, intervals);
+
+    if (stepTemp && stepTemp !== activeOvenTemp) {
+      activeOvenTemp = stepTemp;
+    }
   }
 
   const scheduled = merged.map((step) => ({
