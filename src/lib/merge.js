@@ -37,14 +37,29 @@ function dedupe(ids) {
   return [...new Set(ids)];
 }
 
-// The merge pass (Section 6). Input: flattened, dish-tagged steps (as
-// produced by flattenDishes). Output: { merged, batchSaving }.
+// Section 6's rule ("resource === 'hands'") and Section 4's oven-preheat
+// rule ("two dishes at 200°C merge automatically") both describe the
+// merge pass, but a preheat step's resource is "oven", not "hands" — so
+// Section 6 read alone would never merge them, contradicting Section 4.
+// Reconciled per Section 4: preheating is the one non-hands case that
+// merges, since heating the oven once genuinely serves every dish that
+// uses it afterward (unlike hob/blender steps, where "two pans are two
+// pans" — each dish still needs its own pan even at the same heat).
+function isMergeCandidate(step) {
+  if (!step.mergeable) return false;
+  if (step.resource === "hands") return true;
+  return step.action.toLowerCase() === "preheat" && step.resource === "oven";
+}
+
+// The merge pass (Section 6, extended per Section 4 for oven preheats).
+// Input: flattened, dish-tagged steps (as produced by flattenDishes).
+// Output: { merged, batchSaving }.
 export function merge(flatSteps) {
   const groups = new Map();
   const passthrough = [];
 
   for (const step of flatSteps) {
-    if (step.resource === "hands" && step.mergeable) {
+    if (isMergeCandidate(step)) {
       const key = `${step.action.toLowerCase()}::${step.object.toLowerCase()}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(step);
@@ -80,7 +95,7 @@ export function merge(flatSteps) {
       setupMin,
       perUnitMin,
       units: totalUnits,
-      resource: "hands",
+      resource: members[0].resource,
       mergeable: true,
       dependsOn: dedupe(members.flatMap((m) => m.dependsOn)),
     });
