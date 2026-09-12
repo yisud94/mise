@@ -1,4 +1,5 @@
 import { Badge, Text, Tooltip } from "@mantine/core";
+import { duration } from "../lib/merge.js";
 
 const PX_PER_MIN = 8;
 const ROW_ORDER = ["hands", "hob", "oven", "blender", "passive"];
@@ -43,8 +44,7 @@ function Bar({ step, dishColorByName }) {
   // step carries `dish` (singular). That distinction is how we tell them
   // apart for Section 5.12's styling override.
   const isMerged = Array.isArray(step.dishes);
-  const duration = step.endMin - step.startMin;
-  const width = duration * PX_PER_MIN;
+  const width = (step.endMin - step.startMin) * PX_PER_MIN;
   const label = stepLabel(step);
   // A merged step's badge needs room alongside the label, or the label gets
   // squeezed to 0 width while the (flexShrink: 0) badge takes all the space.
@@ -52,9 +52,14 @@ function Bar({ step, dishColorByName }) {
 
   const dishColor = !isMerged ? (dishColorByName.get(step.dish) ?? "gray") : null;
 
+  // duration(step), not endMin - startMin: on a resource with several
+  // non-integer-minute steps queued back to back, the scheduled timestamps
+  // accumulate floating-point drift that subtracting them back apart
+  // doesn't cancel out (e.g. 35.39999999999999), even though duration()
+  // itself is clean.
   const tooltipLabel = isMerged
-    ? `${label} ×${step.dishes.length} · ${duration} min (${step.dishes.join(", ")})`
-    : `${label} · ${duration} min`;
+    ? `${label} ×${step.dishes.length} · ${duration(step)} min (${step.dishes.join(", ")})`
+    : `${label} · ${duration(step)} min`;
 
   return (
     <Tooltip label={tooltipLabel} events={{ hover: true, focus: true, touch: true }} withinPortal>
