@@ -13,7 +13,9 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
     "@mantine/core": "^9.6.1",
+    "@mantine/dates": "^9.6.1",
     "@mantine/hooks": "^9.6.1",
+    "dayjs": "^1.11.23",
     "mongodb": "^7.6.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
