@@ -174,6 +174,73 @@ describe("schedule — Section 5.3 interval-wide capacity checking", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Oven-temperature affinity: resource capacity only tracks whether the oven
+// is occupied, never what temperature it's actually at. preheatB has no
+// dependencies of its own, so by slack alone it's free to be picked (and
+// placed — capacity intervals don't stop it either, since the oven is
+// otherwise idle) immediately after preheatA, long before cookA is even
+// ready, leaving the oven at 180°C by the time cookA (needs 200°C) runs.
+//
+// Fixture (two independent dishes, no shared prep, capacity all default):
+//   preheatA: oven_200c, duration 10, no deps.   dependent: cookA
+//   cookA:    oven, needs 200c, duration 5, dependsOn [preheatA]
+//   preheatB: oven_180c, duration 1,  no deps.   dependent: cookB
+//   cookB:    oven, needs 180c, duration 10, dependsOn [preheatB]
+//
+// The fix has two parts, both in schedule.js's placement loop (not just
+// priority order — reordering when a step is *picked* doesn't change
+// *where* an unrelated step's own resource search lands it):
+//   1. preheatB is never even selected while cookA (still needing the
+//      active 200°C) remains unplaced, ready or not.
+//   2. Once cookA is placed and 200°C's work is done, preheatB's start is
+//      anchored to the real last-placed 200°C end time (cookA.endMin),
+//      not just its own (empty) dependency list — so it can't backfill
+//      into the early oven gap that existed before cookA ran.
+//
+// Expected: preheatA 0->10, cookA 10->15 (straight after preheatA, oven
+// capacity 1), preheatB 15->16 (anchored to cookA.endMin), cookB 16->26.
+// ---------------------------------------------------------------------------
+describe("schedule — oven-temperature affinity (no needless preheat switching)", () => {
+  const dishes = [
+    {
+      name: "dish a",
+      steps: [
+        { action: "preheat", object: "oven_200c", setupMin: 10, perUnitMin: 0, units: 1, resource: "oven", mergeable: true, dependsOn: [] },
+        { action: "roast", object: "chicken", setupMin: 5, perUnitMin: 0, units: 1, resource: "oven", mergeable: false, dependsOn: [0] },
+      ],
+    },
+    {
+      name: "dish b",
+      steps: [
+        { action: "preheat", object: "oven_180c", setupMin: 1, perUnitMin: 0, units: 1, resource: "oven", mergeable: true, dependsOn: [] },
+        { action: "bake", object: "cake", setupMin: 10, perUnitMin: 0, units: 1, resource: "oven", mergeable: false, dependsOn: [0] },
+      ],
+    },
+  ];
+  const result = schedule(flattenDishes(dishes));
+
+  test("preheatA, cookA, preheatB, cookB — cookA runs before the oven switches to 180°C", () => {
+    const preheatA = result.scheduled.find((s) => s.object === "oven_200c");
+    const cookA = result.scheduled.find((s) => s.object === "chicken");
+    const preheatB = result.scheduled.find((s) => s.object === "oven_180c");
+    const cookB = result.scheduled.find((s) => s.object === "cake");
+
+    expect([preheatA.startMin, preheatA.endMin]).toEqual([0, 10]);
+    expect([cookA.startMin, cookA.endMin]).toEqual([10, 15]);
+    expect([preheatB.startMin, preheatB.endMin]).toEqual([15, 16]);
+    expect([cookB.startMin, cookB.endMin]).toEqual([16, 26]);
+
+    // The essential property: cookA (needs 200°C) starts before preheatB
+    // (switches the oven to 180°C) — never after.
+    expect(cookA.startMin).toBeLessThanOrEqual(preheatB.startMin);
+  });
+
+  test("makespan === 26", () => {
+    expect(result.makespan).toBe(26);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Section 7, algorithm step 2: a dependency cycle must throw.
 // ---------------------------------------------------------------------------
 describe("schedule — cycle detection", () => {
