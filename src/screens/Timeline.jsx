@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Alert, Anchor, Container, Stack, Text } from "@mantine/core";
 import SavingsBanner from "../components/SavingsBanner.jsx";
 import Gantt from "../components/Gantt.jsx";
+import { duration } from "../lib/merge.js";
 
 function formatClock(date) {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -28,7 +29,10 @@ function buildOvenConflictMessage(scheduled) {
   const groups = [...byObject.entries()]
     .map(([object, steps]) => ({
       temp: object.match(/^oven_(.+)c$/)?.[1] ?? object,
-      dishes: [...new Set(steps.map((s) => s.dish))],
+      // A same-temperature preheat is now itself merged (Section 4) into
+      // one step carrying `dishes` (plural); an unmerged one still carries
+      // `dish` (singular) — collect names from whichever is present.
+      dishes: [...new Set(steps.flatMap((s) => (Array.isArray(s.dishes) ? s.dishes : [s.dish])))],
       earliestStart: Math.min(...steps.map((s) => s.startMin)),
     }))
     .sort((a, b) => a.earliestStart - b.earliestStart);
@@ -96,11 +100,15 @@ export default function Timeline({ dishes, result, serveTime, onBack }) {
           {sortedSteps.map((step) => {
             const label = `${capitalize(step.action)} ${step.object}`;
             const who = Array.isArray(step.dishes) ? `${step.dishes.length} dishes` : step.dish;
-            const duration = step.endMin - step.startMin;
+            // Use the step's own duration rather than endMin - startMin: on
+            // a resource with several non-integer-minute steps queued back
+            // to back, the scheduled timestamps accumulate floating-point
+            // drift (e.g. 1.3000000000000007) that subtracting them back
+            // apart doesn't cancel out, even though duration() is clean.
             const time = formatClock(new Date(startTime.getTime() + step.startMin * 60000));
             return (
               <Text key={step.id} size="sm">
-                {time} — {label} ({who}) · {duration} min
+                {time} — {label} ({who}) · {duration(step)} min
               </Text>
             );
           })}
