@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Alert, Anchor, Container, Stack, Text } from "@mantine/core";
 import SavingsBanner from "../components/SavingsBanner.jsx";
 import Gantt from "../components/Gantt.jsx";
-import { duration } from "../lib/merge.js";
+import KitchenPanel from "../components/KitchenPanel.jsx";
+import { duration, flattenDishes } from "../lib/merge.js";
+import { schedule } from "../lib/schedule.js";
 
 function formatClock(date) {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -44,7 +46,15 @@ function buildOvenConflictMessage(scheduled) {
   return `Your dishes want different oven temperatures (${tempList}). I've sequenced them — ${restDishes} go in after ${first.dishes.join(", ")} comes out.`;
 }
 
-export default function Timeline({ dishes, result, serveTime, onBack }) {
+export default function Timeline({ dishes, serveTime, capacity, setCapacity, onBack }) {
+  // Section 8.9 "live re-solve": deriving this from dishes/capacity, rather
+  // than holding it as separately-synced state, means a KitchenPanel change
+  // re-solves and re-renders the Gantt on its own — no extra wiring needed.
+  const result = useMemo(() => {
+    const readyDishes = dishes.filter((d) => d.status === "ready");
+    const flatSteps = flattenDishes(readyDishes.map((d) => ({ name: d.name, steps: d.steps })));
+    return schedule(flatSteps, capacity);
+  }, [dishes, capacity]);
   const { scheduled, sequentialTotal, makespan, batchSaving, parallelSaving } = result;
 
   const dishColorByName = new Map(dishes.map((d) => [d.name, d.color]));
@@ -69,6 +79,8 @@ export default function Timeline({ dishes, result, serveTime, onBack }) {
       </Anchor>
 
       <Stack gap="lg">
+        <KitchenPanel capacity={capacity} setCapacity={setCapacity} />
+
         <SavingsBanner
           sequentialTotal={sequentialTotal}
           makespan={makespan}
