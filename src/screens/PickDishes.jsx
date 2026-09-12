@@ -38,6 +38,41 @@ function withTimeOfDay(date, hhmm) {
   return next;
 }
 
+const REQUEST_TIMEOUT_MS = 12000;
+
+// Section 8.3 (network path) + Section 5.7 (status-code contract). Message
+// text for each case is Section 8.4's — full retry-button / one-time-banner
+// treatment for 503 is Phase 6's job; this just gets the right chip state.
+async function lookupDish(dishName) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch("/api/dish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dishName }),
+      signal: controller.signal,
+    });
+
+    if (response.status === 200) {
+      const data = await response.json();
+      return { ok: true, canonicalName: normalizeDishName(data.dish), steps: data.steps };
+    }
+    if (response.status === 422) {
+      return { ok: false, error: "Not sure that's a dish" };
+    }
+    if (response.status === 503) {
+      return { ok: false, error: "Live lookup is off — seeded dishes still work" };
+    }
+    return { ok: false, error: "Couldn't reach the server" };
+  } catch (err) {
+    return { ok: false, error: err.name === "AbortError" ? "That took too long" : "Couldn't reach the server" };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export default function PickDishes({ dishes, setDishes, serveTime, setServeTime, onBuild }) {
   const [inputValue, setInputValue] = useState("");
   const [highlighted, setHighlighted] = useState(null);
@@ -70,27 +105,26 @@ export default function PickDishes({ dishes, setDishes, serveTime, setServeTime,
 
     const color = DISH_COLORS[dishes.length % DISH_COLORS.length];
     // Section 8.3, step 1: the loading chip must render before any lookup
-    // resolves. Seed lookups are effectively instant, but resolving on a
-    // microtask keeps that guarantee true here too, and means Phase 5's
-    // real fetch() can replace the Promise.resolve() below without
-    // restructuring this flow.
+    // resolves — a seed hit resolves on the next microtask, a seed miss
+    // goes on to the live API (step 3).
     setDishes((prev) => [...prev, { name: normalized, steps: [], status: "loading", error: null, color }]);
     setInputValue("");
 
-    Promise.resolve().then(() => {
-      const steps = seedByName.get(normalized);
+    Promise.resolve().then(async () => {
+      const seedSteps = seedByName.get(normalized);
+      if (seedSteps) {
+        setDishes((prev) => prev.map((d) => (d.name === normalized ? { ...d, steps: seedSteps, status: "ready" } : d)));
+        return;
+      }
+
+      const result = await lookupDish(normalized);
       setDishes((prev) =>
         prev.map((d) => {
           if (d.name !== normalized) return d;
-          if (steps) return { ...d, steps, status: "ready" };
-          return {
-            ...d,
-            status: "error",
-            // Phase 3 is seed-only — there is no live lookup to fail yet,
-            // so this is a placeholder distinct from Section 8.4's
-            // API-driven error copy (which arrives with Phase 5/6).
-            error: "Not in the seed list yet — live lookup isn't wired up until Phase 5.",
-          };
+          if (result.ok) {
+            return { ...d, name: result.canonicalName, steps: result.steps, status: "ready" };
+          }
+          return { ...d, status: "error", error: result.error };
         }),
       );
     });
