@@ -116,7 +116,12 @@ If it is a real dish:
     applied later by a separate scheduler.
   - If this step preheats an oven, encode the temperature in "object" as
     "oven_<temperature>c" (lowercase, no spaces, no degree symbol), e.g.
-    "oven_200c".
+    "oven_200c". Only include a "preheat" step if some later step in this
+    same dish actually depends on it, and that later step must itself use
+    "resource": "oven" (a bake or roast) — never make a hob, hands, or
+    blender step depend on an oven preheat, since that resource isn't
+    involved. A dish that's fried, boiled, or otherwise never uses the oven
+    should have no "preheat" step at all.
 
 Return only the structured output — no prose.`;
 }
@@ -136,6 +141,39 @@ async function getDishes() {
 // Section 5.6: trim, lowercase, collapse whitespace. Never touch spelling.
 function normalizeDishName(raw) {
   return raw.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// Backstop for a preheat step nothing in the dish genuinely needs (e.g.
+// added out of habit to a dish that's actually fried or boiled) — same
+// "validate in JS" pattern as the zero-duration guard above, since the
+// schema can't express "must have a dependent". A dependent only counts if
+// it's itself an oven step (a bake or roast) — a hob/hands/blender step
+// depending on an oven preheat is never legitimate, just a different shape
+// of the same mistake. Only preheat is checked: a dish's last step is
+// *supposed* to have no dependents, but a preheat with no real one is
+// always a mistake. Removing one drops any (now-invalid) direct references
+// to it and reindexes every dependsOn reference above it, since indices are
+// positional.
+function removeOrphanedPreheats(steps) {
+  let result = steps;
+  let orphanIndex;
+  do {
+    orphanIndex = result.findIndex(
+      (step, i) =>
+        step.action === "preheat" &&
+        step.resource === "oven" &&
+        !result.some((s) => s.resource === "oven" && s.dependsOn.includes(i)),
+    );
+    if (orphanIndex !== -1) {
+      result = result
+        .filter((_, i) => i !== orphanIndex)
+        .map((step) => ({
+          ...step,
+          dependsOn: step.dependsOn.filter((d) => d !== orphanIndex).map((d) => (d > orphanIndex ? d - 1 : d)),
+        }));
+    }
+  } while (orphanIndex !== -1);
+  return result;
 }
 
 export default async function handler(req, res) {
@@ -202,13 +240,14 @@ export default async function handler(req, res) {
     // Gotcha #6: minimums aren't enforceable in the structured-output
     // schema, so a degenerate zero-duration step (setupMin and perUnitMin
     // both 0) has to be caught here instead.
-    const steps = parsed.steps.map((step) => {
-      const lowered = { ...step, action: step.action.toLowerCase(), object: step.object.toLowerCase() };
-      if (lowered.setupMin + lowered.perUnitMin * lowered.units <= 0) {
-        lowered.setupMin = 1;
+    const lowered = parsed.steps.map((step) => {
+      const l = { ...step, action: step.action.toLowerCase(), object: step.object.toLowerCase() };
+      if (l.setupMin + l.perUnitMin * l.units <= 0) {
+        l.setupMin = 1;
       }
-      return lowered;
+      return l;
     });
+    const steps = removeOrphanedPreheats(lowered);
 
     // Second cache check, under the canonical name, so a typo and its
     // corrected spelling don't produce two documents (Section 9).
